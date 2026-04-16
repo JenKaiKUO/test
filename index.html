@@ -2,37 +2,40 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>Saxophone AI - API Pro</title>
+    <title>Saxophone AI - iMuse API Official Version</title>
     <script src="https://cdn.jsdelivr.net/npm/midi-player-js@2.1.0/build/midiplayer.min.js"></script>
     <script src="https://cdn.jsdelivr.net/combine/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-
     <style>
-        :root { --gold: #d4af37; --bg: #121212; }
+        :root { --gold: #d4af37; --bg: #1a1a1a; }
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: white; margin: 0; overflow: hidden; }
         #settings-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; z-index: 1000; justify-content: center; align-items: center; }
-        .panel { background: #222; padding: 30px; border-radius: 15px; border: 2px solid var(--gold); width: 340px; text-align: center; }
-        .main-ui { position: fixed; bottom: 40px; width: 100%; text-align: center; z-index: 10; }
-        #status_msg { font-size: 1.1rem; color: var(--gold); margin-bottom: 10px; min-height: 2.5em; }
-        .btn { padding: 12px 24px; background: var(--gold); border: none; border-radius: 8px; cursor: pointer; font-weight: bold; color: black; }
-        select { width: 100%; padding: 12px; margin: 15px 0; border-radius: 8px; background: #333; color: white; border: 1px solid #444; font-size: 16px; }
+        .panel { background: #2d2d2d; padding: 25px; border-radius: 15px; border: 2px solid var(--gold); width: 320px; text-align: center; }
+        .main-ui { position: fixed; bottom: 30px; width: 100%; text-align: center; z-index: 10; }
+        #status_msg { font-size: 1.1rem; color: var(--gold); min-height: 2.5em; text-shadow: 2px 2px 4px #000; }
+        .btn { padding: 10px 20px; background: var(--gold); border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: #000; }
+        select { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; background: #333; color: white; border: 1px solid #555; }
         canvas { width: 100vw; height: 100vh; object-fit: cover; transform: rotateY(180deg); }
     </style>
 </head>
 <body>
 
-    <button class="btn" style="position:fixed; top:20px; right:20px; z-index:100" onclick="toggleSettings(true)">⚙️ 選擇歌曲</button>
+    <button class="btn" style="position:fixed; top:20px; right:20px; z-index:100" onclick="toggleSettings(true)">⚙️ 歌曲選單</button>
 
     <div id="settings-overlay">
         <div class="panel">
-            <h2 style="color:var(--gold)">iMuse 歌曲選單</h2>
-            <select id="midi-select"><option value="">正在從 API 獲取歌單...</option></select>
-            <p style="font-size: 0.8em; color: #888;">本系統模擬 Trombonebone API 下載邏輯</p>
-            <hr style="border:0; border-top:1px solid #444; margin:15px 0;">
+            <h2 style="color:var(--gold); margin-top:0;">iMuse 雲端歌單</h2>
+            <select id="midi-select"><option value="">正在載入官方列表...</option></select>
+            
+            <div id="fail-area" style="display:none; margin:10px 0; padding:10px; background:#442222; border-radius:5px;">
+                <p style="font-size:12px; color:#ff8888; margin:0;">連線逾時 (522/404)</p>
+                <a id="direct-link" href="#" target="_blank" style="color:var(--gold); text-decoration:none; font-weight:bold;">[手動下載檔案]</a>
+            </div>
+
             <input type="file" id="local-upload" accept=".mid,.midi" style="display:none">
-            <button class="btn" style="background:#555; color:white; width:100%" onclick="document.getElementById('local-upload').click()">📂 上傳本機 MIDI</button>
-            <button class="btn" style="width:100%; margin-top:10px;" onclick="toggleSettings(false)">返回</button>
+            <button class="btn" style="width:100%; background:#555; color:white; margin-top:10px;" onclick="document.getElementById('local-upload').click()">📂 上傳本機 MIDI</button>
+            <button class="btn" style="width:100%; margin-top:10px;" onclick="toggleSettings(false)">關閉</button>
         </div>
     </div>
 
@@ -40,67 +43,71 @@
     <video id="webcam" style="display:none" autoplay playsinline></video>
 
     <div class="main-ui">
-        <div id="status_msg">準備就緒，請開啟設定載入歌曲</div>
-        <div style="width:80%; height:6px; background:#333; margin:0 auto; border-radius:3px;">
-            <div id="progress-fill" style="width:0%; height:100%; background:var(--gold); transition:0.1s;"></div>
-        </div>
+        <div id="status_msg">正在初始化系統...</div>
+        <div style="width:80%; height:4px; background:#333; margin:0 auto;"><div id="progress-fill" style="width:0%; height:100%; background:var(--gold);"></div></div>
     </div>
 
     <script type="module">
-        const API_ROOT = "https://imuse.ncnu.edu.tw/Midi-library/api/midis";
         const PROXY = "https://api.allorigins.win/raw?url=";
-        
+        const API_LIST = "https://imuse.ncnu.edu.tw/Midi-library/api/midis";
+        const DOWNLOAD_BASE = "https://imuse.ncnu.edu.tw/Midi-library/api/midis/";
+
         let audioCtx, saxPlayer, noteQueue = [], currentIndex = 0, isPinching = false;
 
-        // --- 1. 初始化歌單 (取得 UUID) ---
-        async function fetchMidiList() {
+        // --- 符合文檔格式的列表獲取 ---
+        async function fetchSongs() {
             const select = document.getElementById('midi-select');
             try {
-                const res = await fetch(PROXY + encodeURIComponent(API_ROOT));
-                const data = await res.json();
-                const items = data.items || [];
+                const response = await fetch(PROXY + encodeURIComponent(API_LIST));
+                const text = await response.text();
                 
+                // 檢查是否為 HTML 報錯頁面
+                if (text.trim().startsWith("<!DOCTYPE")) throw new Error("Proxy 回傳 HTML 錯誤");
+
+                const data = JSON.parse(text);
+                const items = data.items || []; // 依據 docs: items 是一個陣列
+
                 select.innerHTML = '<option value="">-- 請選擇歌曲 --</option>';
                 items.forEach(item => {
                     const opt = new Option(item.title || item.filename, item.id);
+                    opt.dataset.filename = item.filename;
                     select.add(opt);
                 });
             } catch (err) {
-                console.error("API 獲取失敗", err);
-                select.innerHTML = '<option value="">❌ 無法載入線上歌單 (522)</option>';
+                console.error("解析 API 失敗:", err);
+                select.innerHTML = '<option value="">❌ API 連線失敗 (522)</option>';
+                // 顯示手動模式提示
             }
         }
 
-        // --- 2. 下載指定 ID 的檔案 (Blob 處理模式) ---
-        async function downloadMidi(id, title) {
-            if (!audioCtx) await initAudio();
-            const msg = document.getElementById('status_msg');
-            msg.innerText = `🎵 正在下載：${title}...`;
+        // --- 符合文檔的下載邏輯 ---
+        async function loadMidi(id, filename) {
+            if (!id) return;
+            if (!audioCtx) await initEngine();
 
-            const downloadUrl = `${API_ROOT}/${id}/download`;
+            const msg = document.getElementById('status_msg');
+            const failArea = document.getElementById('fail-area');
+            const directLink = document.getElementById('direct-link');
             
+            // 下載連結格式: /api/midis/{id}/download
+            const downloadUrl = `${DOWNLOAD_BASE}${id}/download`;
+            directLink.href = downloadUrl;
+            failArea.style.display = "none";
+            msg.innerText = `⏳ 正在獲取：${filename}...`;
+
             try {
-                // 使用 Proxy 繞過 CORS
                 const res = await fetch(PROXY + encodeURIComponent(downloadUrl));
-                if (!res.ok) throw new Error("下載失敗");
+                if (!res.ok) throw new Error("Download 522");
 
                 const buffer = await res.arrayBuffer();
-                
-                // ✅ 模擬對方的 Blob 處理
-                const fileBlob = new Blob([buffer], { type: "audio/midi" });
-                
-                parseMidi(buffer, title);
-                toggleSettings(false);
-            } catch (err) {
-                msg.innerHTML = `<span style="color:red">連線失敗</span><br><small>請確認 iMuse 伺服器狀態</small>`;
-            }
-        }
+                if (buffer.byteLength < 500) throw new Error("Invalid Buffer");
 
-        // --- 3. 核心功能 ---
-        async function initAudio() {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            saxPlayer = await Soundfont.instrument(audioCtx, 'alto_sax');
-            startCamera();
+                parseMidi(buffer, filename);
+                toggleSettings(false);
+            } catch (e) {
+                msg.innerHTML = `<span style="color:#ff6666">連線失敗</span><br>伺服器無回應，請手動下載後上傳。`;
+                failArea.style.display = "block";
+            }
         }
 
         function parseMidi(buffer, title) {
@@ -108,35 +115,37 @@
             player.loadArrayBuffer(buffer);
             noteQueue = [];
             player.getEvents().forEach(track => {
-                track.forEach(ev => {
-                    if (ev.name === 'Note on' && ev.velocity > 0) noteQueue.push(ev.noteNumber);
-                });
+                track.forEach(ev => { if(ev.name === 'Note on' && ev.velocity > 0) noteQueue.push(ev.noteNumber); });
             });
             currentIndex = 0;
-            document.getElementById('status_msg').innerText = `✅ 已載入：《${title}》`;
+            document.getElementById('status_msg').innerText = `✅ 就緒：《${title}》`;
+        }
+
+        async function initEngine() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            saxPlayer = await Soundfont.instrument(audioCtx, 'alto_sax');
+            startCamera();
         }
 
         function triggerNote() {
             if (currentIndex >= noteQueue.length) return;
             saxPlayer.play(noteQueue[currentIndex], audioCtx.currentTime, { gain: 1.5 });
             currentIndex++;
-            document.getElementById('progress-fill').style.width = (currentIndex / noteQueue.length) * 100 + '%';
+            document.getElementById('progress-fill').style.width = (currentIndex / noteQueue.length * 100) + '%';
         }
 
         function startCamera() {
-            const hands = new Hands({
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
-            });
+            const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
             hands.onResults(res => {
                 const canvas = document.getElementById('output_canvas');
                 const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(res.image, 0, 0, canvas.width, canvas.height);
+                ctx.clearRect(0,0,canvas.width,canvas.height);
+                ctx.drawImage(res.image, 0,0,canvas.width,canvas.height);
                 if (res.multiHandLandmarks?.[0]) {
                     const lm = res.multiHandLandmarks[0];
-                    if (Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) < 0.05) {
-                        if (!isPinching) { triggerNote(); isPinching = true; }
+                    if (Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y) < 0.05) {
+                        if(!isPinching) { triggerNote(); isPinching = true; }
                     } else { isPinching = false; }
                 }
             });
@@ -144,26 +153,20 @@
                 onFrame: async () => await hands.send({image: document.getElementById('webcam')}), 
                 width: 640, height: 480 
             }).start();
-            document.getElementById('output_canvas').width = 640;
-            document.getElementById('output_canvas').height = 480;
         }
 
-        // --- 4. 事件與啟動 ---
-        window.toggleSettings = (show) => document.getElementById('settings-overlay').style.display = show ? 'flex' : 'none';
-        
+        window.toggleSettings = (s) => document.getElementById('settings-overlay').style.display = s ? 'flex' : 'none';
         document.getElementById('midi-select').onchange = (e) => {
-            const title = e.target.options[e.target.selectedIndex].text;
-            downloadMidi(e.target.value, title);
+            const opt = e.target.options[e.target.selectedIndex];
+            loadMidi(e.target.value, opt.dataset.filename);
         };
-
         document.getElementById('local-upload').onchange = (e) => {
-            initAudio();
+            if(!audioCtx) initEngine();
             const reader = new FileReader();
             reader.onload = (ev) => { parseMidi(ev.target.result, "本機檔案"); toggleSettings(false); };
             reader.readAsArrayBuffer(e.target.files[0]);
         };
-
-        fetchMidiList();
+        fetchSongs();
     </script>
 </body>
 </html>
